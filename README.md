@@ -132,28 +132,21 @@ Cada etapa do processamento gera visualizações que são salvas na pasta `image
 O processamento gera 6 figuras que documentam cada etapa:
 
 **Figura 1: Imagem Original**
-![Original](images/results/01_imagem_original.png)
 
 **Figura 2: Detecção de Bordas (Sobel)**
-![Bordas](images/results/02_deteccao_bordas.png)
 
 **Figura 3: Segmentação HSV**
-![HSV](images/results/03_segmentacao_hsv.png)
 
 **Figura 4: Processamento de Células**
-![Células](images/results/04_processamento_celulas.png)
 
 **Figura 5: Resultado Final**
-![Final](images/results/05_resultado_final.png)
 *Células infectadas (X ciano) e hemácias normais (círculos verdes)*
 
 **Figura 6: Análise Hough**
-![Hough](images/results/06_analise_hough.png)
-
 ### Análise de Desempenho
 
 **Células Infectadas (X Ciano):**
-- ✅ **Acurácia: ~100%** em quase todos os casos testados
+- ✅ **Acurácia: ~80%** em quase todos os casos testados
 - Falsos positivos: geralmente **+1 célula** por imagem
 - Alta precisão devido à segmentação HSV específica
 
