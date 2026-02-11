@@ -6,6 +6,7 @@ from skimage.filters import sobel
 from skimage.morphology import binary_opening, binary_closing, disk, binary_dilation
 from skimage import color
 from skimage.draw import circle_perimeter
+from skimage.measure import label, regionprops
 
 # ========== PARÂMETROS CONFIGURÁVEIS ==========
 # Ajuste estes valores para melhorar a detecção
@@ -13,6 +14,27 @@ from skimage.draw import circle_perimeter
 # Limiar de Binarização (multiplicador do máximo valor do Sobel)
 # Teste valores entre 0.03 e 0.10
 THRESHOLD_MULTIPLIER = 0.03  # Limiar = edges.max() * THRESHOLD_MULTIPLIER
+
+# --- Parâmetros HSV para detecção de malária ---
+# Canal Hue: identifica a tonalidade (roxo/azulado do parasita corado com Giemsa)
+# Hue no skimage vai de 0.0 a 1.0 (0=vermelho, 0.17=amarelo, 0.33=verde, 0.5=ciano, 0.67=azul, 0.83=magenta)
+HUE_MIN = 0.55          # Mínimo do hue (azul/roxo)
+HUE_MAX = 0.95          # Máximo do hue (magenta/roxo)
+
+# Canal Saturation: garante que a cor é saturada (não cinza/branco)
+SAT_MIN = 0.15          # Saturação mínima (evita regiões acinzentadas)
+SAT_MAX = 1.0           # Saturação máxima
+
+# Canal Value: garante que não é muito claro (fundo) nem muito escuro (artefato)
+VAL_MIN = 0.1           # Valor mínimo (evita regiões muito escuras/pretas)
+VAL_MAX = 0.75          # Valor máximo (evita fundo claro e hemácias normais rosadas)
+
+# Tamanho do disco para operações morfológicas na máscara HSV
+HSV_MORPH_DISK_CLOSE = 5   # Disco para fechamento (une regiões próximas)
+HSV_MORPH_DISK_OPEN = 3    # Disco para abertura (remove ruído)
+
+# Área mínima de uma região de malária (em pixels) - regiões menores são descartadas
+MIN_MALARIA_AREA = 200     # Ajuste conforme resolução da imagem
 
 # Raios para detecção de Células Infectadas (em pixels)
 MALARIA_RADIUS_MIN = 75  # Raio mínimo
@@ -48,7 +70,7 @@ def binarize_with_sobel(image, threshold_multiplier):
     binary[binary <= limiar] = 0
     binary[binary > limiar] = 1
     
-    # Aplica operações morfológicas
+    # Aplica operações morfológicas para remoção/redução de ruído
     binary = binary_closing(binary)
     binary = binary_opening(binary)
     
@@ -210,21 +232,84 @@ def detect_rb_cells(rb_cells_edges, rb_cells_filled, malarian_detected, malaria_
     
     return color_image, hough_res
 
+def create_malaria_mask_hsv(image_rgb, binary_cells):
+    """
+    Cria uma máscara para células infectadas usando os 3 canais do HSV.
+    
+    Parasitas corados com Giemsa aparecem como manchas roxas/azuladas escuras.
+    Hemácias normais são rosadas/avermelhadas e mais claras.
+    
+    Retorna:
+        malaria_mask: máscara booleana das regiões de malária
+        debug_info: dicionário com máscaras intermediárias para visualização
+    """
+    image_hsv = color.rgb2hsv(image_rgb)
+    hue = image_hsv[:, :, 0]
+    sat = image_hsv[:, :, 1]
+    val = image_hsv[:, :, 2]
+    
+    # --- Máscara baseada nos 3 canais ---
+    # Hue: seleciona tonalidades roxas/azuladas (parasita)
+    # Trata o caso de hue_min > hue_max (quando a faixa cruza o 0/1)
+    if HUE_MIN <= HUE_MAX:
+        hue_mask = (hue >= HUE_MIN) & (hue <= HUE_MAX)
+    else:
+        # Faixa que cruza a fronteira 0/1 (ex: 0.85 a 0.15)
+        hue_mask = (hue >= HUE_MIN) | (hue <= HUE_MAX)
+    
+    # Saturação: garante que há cor real (não é branco/cinza)
+    sat_mask = (sat >= SAT_MIN) & (sat <= SAT_MAX)
+    
+    # Valor: exclui regiões muito claras (fundo) e muito escuras (artefatos)
+    val_mask = (val >= VAL_MIN) & (val <= VAL_MAX)
+    
+    # Combina as 3 condições
+    combined_mask = hue_mask & sat_mask & val_mask
+    
+    # Intersecciona com a binarização (só considerar onde há células)
+    combined_mask = combined_mask & binary_cells
+    
+    # --- Operações morfológicas para limpar a máscara ---
+    # Fechamento: une pequenos buracos e regiões fragmentadas
+    combined_mask = binary_closing(combined_mask, disk(HSV_MORPH_DISK_CLOSE))
+    # Abertura: remove ruído pequeno
+    combined_mask = binary_opening(combined_mask, disk(HSV_MORPH_DISK_OPEN))
+    
+    # --- Remove regiões muito pequenas (ruído residual) ---
+    labeled_mask = label(combined_mask)
+    cleaned_mask = np.zeros_like(combined_mask, dtype=bool)
+    for region in regionprops(labeled_mask):
+        if region.area >= MIN_MALARIA_AREA:
+            cleaned_mask[labeled_mask == region.label] = True
+    
+    # Informações de debug para visualização
+    debug_info = {
+        'hue': hue,
+        'sat': sat,
+        'val': val,
+        'hue_mask': hue_mask,
+        'sat_mask': sat_mask,
+        'val_mask': val_mask,
+        'combined_raw': hue_mask & sat_mask & val_mask,
+        'combined_cleaned': cleaned_mask
+    }
+    
+    return cleaned_mask, debug_info
+# ==============================================================================================================================================================================
+# ==============================================================================================================================================================================
+# ==============================================================================================================================================================================
+
+
 # Carrega a imagem
-original_img = imread('DSCN1365_JPG.rf.116e18e1c8a0201f1bec8005ab1db0f1.jpg')
+# original_img = imread('DSCN1365_JPG.rf.116e18e1c8a0201f1bec8005ab1db0f1.jpg')
+original_img = imread('images/DSCN1365.JPG')
 image_gray = color.rgb2gray(original_img)
 
 # Binariza usando Sobel com limiar dinâmico
 binary_all_cells, edges_sobel = binarize_with_sobel(image_gray, THRESHOLD_MULTIPLIER)
 
-# Separa células de malária das hemácias normais
-# Células de malária tendem a ter intensidades diferentes na imagem original
-# Usa a diferença de intensidade para separar
-image_hsv = color.rgb2hsv(original_img)
-hue_channel = image_hsv[:,:,0]
-
-# Identifica regiões com características de malária (hue mais alto)
-malaria_mask = hue_channel > 0.75  # Ajustar conforme necessário
+# Separa células de malária usando os 3 canais do HSV
+malaria_mask, hsv_debug = create_malaria_mask_hsv(original_img, binary_all_cells)
 malaria_binary = binary_all_cells.copy()
 malaria_binary[~malaria_mask] = 0
 
@@ -244,7 +329,7 @@ final_result, rbc_hough = detect_rb_cells(final_blood_cells_edges, final_blood_c
 edge_histogram = np.histogram(edges_sobel.ravel(), bins=256)
 
 # Visualização dos resultados
-fig, axes = plt.subplots(4, 3, figsize=(15, 20))
+fig, axes = plt.subplots(5, 3, figsize=(15, 25))
 
 # Linha 1 - Processamento inicial
 axes[0, 0].imshow(original_img)
@@ -259,59 +344,69 @@ axes[0, 2].imshow(edges_sobel, cmap='gray')
 axes[0, 2].set_title(f'Sobel da Imagem\n(limiar={THRESHOLD_MULTIPLIER}*max)')
 axes[0, 2].axis('off')
 
-# Linha 2 - Células de Malária
-axes[1, 0].imshow(binary_all_cells, cmap='gray')
-axes[1, 0].set_title('Binarização (Todas as Células)')
+# Linha 2 - Canais HSV (para calibração dos parâmetros)
+axes[1, 0].imshow(hsv_debug['hue'], cmap='hsv')
+axes[1, 0].set_title(f'Canal Hue\n(filtro: {HUE_MIN}–{HUE_MAX})')
 axes[1, 0].axis('off')
 
-axes[1, 1].imshow(final_malarian_cells, cmap='gray')
-axes[1, 1].set_title(f'Células Infectadas\n(raios: {MALARIA_RADIUS_MIN}-{MALARIA_RADIUS_MAX})')
+axes[1, 1].imshow(hsv_debug['sat'], cmap='gray')
+axes[1, 1].set_title(f'Canal Saturação\n(filtro: {SAT_MIN}–{SAT_MAX})')
 axes[1, 1].axis('off')
 
-axes[1, 2].imshow(final_malarian_cells_edges, cmap='gray')
-axes[1, 2].set_title('Sobel - Células Infectadas')
+axes[1, 2].imshow(hsv_debug['val'], cmap='gray')
+axes[1, 2].set_title(f'Canal Valor\n(filtro: {VAL_MIN}–{VAL_MAX})')
 axes[1, 2].axis('off')
 
-# Linha 3 - Hemácias Normais e Resultado
-axes[2, 0].imshow(final_blood_cells, cmap='gray')
-axes[2, 0].set_title(f'Hemácias Normais\n(raios: {RBC_RADIUS_MIN}-{RBC_RADIUS_MAX})')
+# Linha 3 - Máscaras HSV e resultado combinado
+axes[2, 0].imshow(hsv_debug['hue_mask'], cmap='gray')
+axes[2, 0].set_title('Máscara Hue')
 axes[2, 0].axis('off')
 
-axes[2, 1].imshow(final_blood_cells_edges, cmap='gray')
-axes[2, 1].set_title('Sobel - Hemácias Normais')
+axes[2, 1].imshow(hsv_debug['combined_raw'], cmap='gray')
+axes[2, 1].set_title('Máscara HSV Combinada (bruta)')
 axes[2, 1].axis('off')
 
-axes[2, 2].imshow(final_result)
-axes[2, 2].set_title(f'Detecção Final\n(Turquesa: {num_malaria} Infectadas | Verde: Normais)')
+axes[2, 2].imshow(hsv_debug['combined_cleaned'], cmap='gray')
+axes[2, 2].set_title('Máscara HSV Final (limpa)')
 axes[2, 2].axis('off')
 
-# Linha 4 - Análise dos Acumuladores de Hough
-axes[3, 0].plot(edge_histogram[0], '-k')
-axes[3, 0].set_title('Histograma das Bordas (Sobel)')
-axes[3, 0].set_xlabel('Intensidade')
-axes[3, 0].set_ylabel('Frequência')
-axes[3, 0].grid(True, alpha=0.3)
+# Linha 4 - Detecção
+axes[3, 0].imshow(final_malarian_cells, cmap='gray')
+axes[3, 0].set_title(f'Células Infectadas\n(raios: {MALARIA_RADIUS_MIN}-{MALARIA_RADIUS_MAX})')
+axes[3, 0].axis('off')
 
-# Acumulador de Hough para células de malária (média dos raios)
+axes[3, 1].imshow(final_blood_cells, cmap='gray')
+axes[3, 1].set_title(f'Hemácias Normais\n(raios: {RBC_RADIUS_MIN}-{RBC_RADIUS_MAX})')
+axes[3, 1].axis('off')
+
+axes[3, 2].imshow(final_result)
+axes[3, 2].set_title(f'Detecção Final\n(Turquesa: {num_malaria} Infectadas | Verde: Normais)')
+axes[3, 2].axis('off')
+
+# Linha 5 - Análise dos Acumuladores de Hough
+axes[4, 0].plot(edge_histogram[0], '-k')
+axes[4, 0].set_title('Histograma das Bordas (Sobel)')
+axes[4, 0].set_xlabel('Intensidade')
+axes[4, 0].set_ylabel('Frequência')
+axes[4, 0].grid(True, alpha=0.3)
+
 if len(malaria_hough) > 0:
     malaria_accum_mean = np.mean(malaria_hough, axis=0)
-    axes[3, 1].imshow(malaria_accum_mean, cmap='hot')
-    axes[3, 1].set_title(f'Acumulador Hough - Malária\n(média dos raios {MALARIA_RADIUS_MIN}-{MALARIA_RADIUS_MAX})')
-    axes[3, 1].axis('off')
+    axes[4, 1].imshow(malaria_accum_mean, cmap='hot')
+    axes[4, 1].set_title(f'Acumulador Hough - Malária\n(média dos raios {MALARIA_RADIUS_MIN}-{MALARIA_RADIUS_MAX})')
+    axes[4, 1].axis('off')
 else:
-    axes[3, 1].text(0.5, 0.5, 'Sem dados', ha='center', va='center')
-    axes[3, 1].axis('off')
+    axes[4, 1].text(0.5, 0.5, 'Sem dados', ha='center', va='center')
+    axes[4, 1].axis('off')
 
-# Acumulador de Hough para hemácias normais (média dos raios)
 if len(rbc_hough) > 0:
     rbc_accum_mean = np.mean(rbc_hough, axis=0)
-    axes[3, 2].imshow(rbc_accum_mean, cmap='hot')
-    axes[3, 2].set_title(f'Acumulador Hough - Hemácias\n(média dos raios {RBC_RADIUS_MIN}-{RBC_RADIUS_MAX})')
-    axes[3, 2].axis('off')
+    axes[4, 2].imshow(rbc_accum_mean, cmap='hot')
+    axes[4, 2].set_title(f'Acumulador Hough - Hemácias\n(média dos raios {RBC_RADIUS_MIN}-{RBC_RADIUS_MAX})')
+    axes[4, 2].axis('off')
 else:
-    axes[3, 2].text(0.5, 0.5, 'Sem dados', ha='center', va='center')
-    axes[3, 2].axis('off')
+    axes[4, 2].text(0.5, 0.5, 'Sem dados', ha='center', va='center')
+    axes[4, 2].axis('off')
 
 plt.tight_layout()
 plt.show()
-
