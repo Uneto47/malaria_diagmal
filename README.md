@@ -2,7 +2,7 @@
 
 **Trabalho Final - Processamento de Imagens**
 
-**Autores:** Unaldo Neto e Rueslei  
+**Autores:** UNALDO SANTOS VASCONCELOS NETO e RUESLEI CONCEICAO DOS SANTOS  
 **Ano:** 2026
 
 ---
