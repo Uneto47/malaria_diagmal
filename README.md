@@ -85,6 +85,7 @@ Este repositório contém todos os arquivos e documentação do trabalho:
 malaria_diagmal/
 ├── README.md                    # Esta apresentação
 ├── deteccao_malaria.ipynb       # Notebook Jupyter com implementação completa
+├── requirements.txt             # Dependências do projeto
 │
 ├── images/
 │   ├── input/                   # Imagens do dataset (sem classificação)
