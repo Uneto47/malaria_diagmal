@@ -161,7 +161,7 @@ O processamento gera 6 figuras que documentam cada etapa:
 
 ## 6. Vídeo de Apresentação
 
-**Link:** [[Apresentação no Youtube]](https://youtu.be/fq5M-vyYuv8)
+**Link:** [[Apresentação no Youtube]](https://youtu.be/i3pG1kNxOPI)
 
 **Conteúdo:** Demonstração do sistema funcionando, explicação da metodologia e discussão dos resultados.
 
